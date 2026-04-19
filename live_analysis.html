@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Signal Center Run Live Analysis</title>
+  <style>
+    :root {
+      --page: #f7fbf8;
+      --panel: #ffffff;
+      --ink: #17191c;
+      --muted: #5c6670;
+      --line: #cbd8d1;
+      --green: #168456;
+      --red: #d1495b;
+      --gold: #d1a32f;
+      --teal: #0f8f88;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Arial, Helvetica, sans-serif;
+      color: var(--ink);
+      background: var(--page);
+    }
+    header {
+      padding: 22px;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel);
+    }
+    h1, h2, p { margin: 0; }
+    h1 { font-size: 26px; margin-bottom: 8px; }
+    p { color: var(--muted); line-height: 1.45; }
+    main {
+      padding: 18px;
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 14px;
+    }
+    .card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      padding: 14px;
+    }
+    .wide { grid-column: span 2; }
+    .full { grid-column: 1 / -1; }
+    .label {
+      color: var(--muted);
+      font-size: 12px;
+      text-transform: uppercase;
+      font-weight: 700;
+      letter-spacing: .04em;
+      margin-bottom: 6px;
+    }
+    .value {
+      font-size: 30px;
+      font-weight: 700;
+      line-height: 1.1;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 10px;
+      font-size: 14px;
+    }
+    th, td {
+      text-align: left;
+      border-bottom: 1px solid var(--line);
+      padding: 8px 6px;
+      vertical-align: top;
+    }
+    th { font-size: 12px; color: var(--muted); text-transform: uppercase; }
+    .sig { color: var(--green); font-weight: 700; }
+    .warn { color: var(--red); font-weight: 700; }
+    .muted { color: var(--muted); }
+    .pill {
+      display: inline-block;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 5px 7px;
+      margin: 4px 4px 0 0;
+      background: #edf7f2;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    @media (max-width: 900px) {
+      main { grid-template-columns: 1fr; }
+      .wide, .full { grid-column: auto; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Signal Center Run Live Analysis</h1>
+    <p>Exploratory checks update automatically from the Google Sheet. Treat p-values as live monitoring, not final statistics.</p>
+  </header>
+  <main>
+    <section class="card">
+      <div class="label">Participants</div>
+      <div class="value" id="sessions">-</div>
+    </section>
+    <section class="card">
+      <div class="label">Main Trials</div>
+      <div class="value" id="trials">-</div>
+    </section>
+    <section class="card">
+      <div class="label">Completed Choices</div>
+      <div class="value" id="completed">-</div>
+    </section>
+    <section class="card">
+      <div class="label">P(Choose Left)</div>
+      <div class="value" id="leftRate">-</div>
+    </section>
+
+    <section class="card wide">
+      <h2>Live Tests</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Question</th>
+            <th>n</th>
+            <th>r</th>
+            <th>p approx.</th>
+            <th>Flag</th>
+          </tr>
+        </thead>
+        <tbody id="tests"></tbody>
+      </table>
+    </section>
+
+    <section class="card wide">
+      <h2>Strategy Checks</h2>
+      <table>
+        <tbody>
+          <tr>
+            <th>Closer-option agreement</th>
+            <td id="closerAgreement">-</td>
+          </tr>
+          <tr>
+            <th>Lower-uncertainty agreement</th>
+            <td id="uncertaintyAgreement">-</td>
+          </tr>
+          <tr>
+            <th>Dominant hand counts</th>
+            <td id="handCounts">-</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="card full">
+      <h2>By Condition Family</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Family</th>
+            <th>Trials</th>
+            <th>P(Choose Left)</th>
+            <th>Hit Rate</th>
+            <th>Mean Error</th>
+          </tr>
+        </thead>
+        <tbody id="families"></tbody>
+      </table>
+    </section>
+
+    <section class="card full">
+      <h2>Status</h2>
+      <p id="status">Waiting for first update...</p>
+    </section>
+  </main>
+
+  <script>
+    const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxrm28s8quFNlFPAFrOGsgP8w7JGvcybNiD4yEfZqTTTWI2uhrXV-DFgN0LAVeLdQKO2Q/exec';
+    const POLL_MS = 15000;
+    let requestId = 0;
+
+    function pct(value) {
+      return value === '' || value == null || Number.isNaN(Number(value))
+        ? '-'
+        : `${Math.round(Number(value) * 100)}%`;
+    }
+
+    function num(value) {
+      return value === '' || value == null || Number.isNaN(Number(value)) ? '-' : String(value);
+    }
+
+    function setText(id, value) {
+      document.getElementById(id).textContent = value;
+    }
+
+    function render(data) {
+      if (!data || !data.ok) {
+        setText('status', data && data.error ? data.error : 'No analysis data returned.');
+        return;
+      }
+
+      setText('sessions', num(data.n_sessions));
+      setText('trials', num(data.n_rows_main));
+      setText('completed', num(data.n_completed_choice_trials));
+      setText('leftRate', pct(data.choice_summary.p_choose_left));
+      setText('closerAgreement', pct(data.choice_summary.closer_option_agreement));
+      setText('uncertaintyAgreement', pct(data.choice_summary.lower_uncertainty_agreement));
+
+      const handCounts = data.hand_counts || {};
+      document.getElementById('handCounts').innerHTML = Object.keys(handCounts).length
+        ? Object.keys(handCounts).map(key => `<span class="pill">${key}: ${handCounts[key]}</span>`).join('')
+        : '-';
+
+      document.getElementById('tests').innerHTML = (data.tests || []).map(test => {
+        const p = test.p_approx === '' ? '' : Number(test.p_approx);
+        const sig = p !== '' && p < 0.05;
+        const enough = Number(test.n) >= 20;
+        const flag = sig && enough ? '<span class="sig">watch</span>' : !enough ? '<span class="muted">too early</span>' : '<span class="muted">none</span>';
+        return `<tr>
+          <td>${test.label}</td>
+          <td>${num(test.n)}</td>
+          <td>${num(test.r)}</td>
+          <td>${test.p_approx === '' ? '-' : test.p_approx}</td>
+          <td>${flag}</td>
+        </tr>`;
+      }).join('');
+
+      const families = data.by_condition_family || {};
+      document.getElementById('families').innerHTML = Object.keys(families).sort().map(key => {
+        const item = families[key];
+        return `<tr>
+          <td>${key}</td>
+          <td>${num(item.trials)}</td>
+          <td>${pct(item.p_choose_left)}</td>
+          <td>${pct(item.hit_rate)}</td>
+          <td>${num(item.mean_endpoint_error_px)} px</td>
+        </tr>`;
+      }).join('');
+
+      const generated = new Date(data.generated_at_iso);
+      setText('status', `Last update: ${generated.toLocaleString()}. This dashboard reads Trials_Main, so practice trials are excluded.`);
+    }
+
+    function loadAnalysis() {
+      requestId += 1;
+      const callbackName = `__signalCenterLive${requestId}`;
+      const script = document.createElement('script');
+      const timeout = setTimeout(() => {
+        setText('status', 'Still waiting for the Apps Script response. If this persists, redeploy the script as a new version.');
+        cleanup();
+      }, 12000);
+
+      function cleanup() {
+        clearTimeout(timeout);
+        delete window[callbackName];
+        script.remove();
+      }
+
+      window[callbackName] = data => {
+        render(data);
+        cleanup();
+      };
+
+      script.onerror = () => {
+        setText('status', 'Could not load analysis from the Apps Script URL.');
+        cleanup();
+      };
+
+      script.src = `${SCRIPT_URL}?analysis=1&callback=${callbackName}&t=${Date.now()}`;
+      document.body.appendChild(script);
+    }
+
+    loadAnalysis();
+    setInterval(loadAnalysis, POLL_MS);
+  </script>
+</body>
+</html>
